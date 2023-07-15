@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -18,27 +19,40 @@ pub fn get_file_data(dir_path: &str) -> io::Result<Vec<FileData>> {
 
 pub fn traverse_directory(path: &Path, files: &mut Vec<FileData>) -> io::Result<()> {
     if path.is_file() {
-        let size_in_kb = get_file_size(path)?;
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let file_path = path.to_string_lossy().to_string();
+        if let Some(name) = path.file_name() {
+            let size_in_kb = get_file_size(path)?;
+            let file_name = name.to_string_lossy().to_string();
+            let file_path = path.to_string_lossy().to_string();
 
-        let file_data = FileData {
-            name,
-            path: file_path,
-            size: size_in_kb,
-        };
+            let file_data = FileData {
+                name: file_name,
+                path: file_path,
+                size: size_in_kb,
+            };
 
-        files.push(file_data);
+            files.push(file_data);
+        }
     } else if path.is_dir() {
         let entries = fs::read_dir(path)?;
 
-        for entry in entries {
-            let entry = entry?;
-            let entry_path = entry.path();
-            traverse_directory(&entry_path, files)?;
+        let file_data_entries: Vec<io::Result<Vec<FileData>>> = entries
+            .into_iter()
+            .par_bridge()
+            .map(|entry_result| {
+                entry_result.and_then(|entry| {
+                    let entry_path = entry.path();
+                    let mut sub_files = Vec::new();
+                    traverse_directory(&entry_path, &mut sub_files)?;
+                    Ok(sub_files)
+                })
+            })
+            .collect();
+
+        for file_data_result in file_data_entries {
+            let file_data = file_data_result?;
+            files.par_extend(file_data);
         }
     }
-
     Ok(())
 }
 
